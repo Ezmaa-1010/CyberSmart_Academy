@@ -1,12 +1,8 @@
 import os
 import random
 import re
+import requests
 import streamlit as st
-
-try:
-    from groq import Groq
-except ImportError:
-    Groq = None
 
 st.set_page_config(
     page_title="CyberSmart Academy",
@@ -15,82 +11,86 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ----------------------------- Sample content -----------------------------
-PHISHING_SCENARIOS = [
+# ----------------------------
+# App content and rule-based checks
+# ----------------------------
+PHISHING_EMAILS = [
     {
-        "sender": "security-alerts@paypaI.example",
-        "subject": "URGENT: Your account will be closed in 10 minutes",
-        "message": "We noticed unusual activity. Confirm your password immediately to avoid losing access.",
-        "clues": [
-            "The message uses pressure and urgency.",
-            "The sender address uses a suspicious look-alike spelling.",
-            "A legitimate service should not ask you to send your password in a message.",
-        ],
+        "sender": "security-alert@paypaI-support.example",
+        "subject": "URGENT: Your account will be closed",
+        "body": "We detected unusual activity. Verify your account immediately using this link or your account will be permanently suspended.",
         "answer": "Phishing",
-        "explanation": "This message uses urgency, a look-alike sender address, and a request for a password. Don't click links or share credentials. Visit the service using its official app or a web address you type yourself.",
+        "clues": [
+            "Urgent pressure and a threat of account closure",
+            "A suspicious sender address that imitates a trusted brand",
+            "A request to click a link to verify an account",
+        ],
     },
     {
-        "sender": "library@university.example",
-        "subject": "Library opening hours this week",
-        "message": "The library will close at 5 PM on Friday. You can check the notice board in the student portal.",
-        "clues": [
-            "The message gives routine information.",
-            "It does not request a password, payment, or urgent action.",
-            "You can verify the notice through a known university channel.",
-        ],
+        "sender": "updates@library.example",
+        "subject": "Your library book is due Friday",
+        "body": "This is a reminder that your borrowed book is due Friday. You can check the due date by opening the library app or typing the library website address into your browser.",
         "answer": "Likely legitimate",
-        "explanation": "This message has no obvious phishing indicators in the text shown. Still, verify unexpected messages through a known official channel; a message can look ordinary and still be fraudulent.",
+        "clues": [
+            "The message does not demand passwords or payment",
+            "It suggests opening the official app or typing the address yourself",
+            "Still verify unexpected messages through a known official channel",
+        ],
     },
     {
-        "sender": "prize-team@free-gift.example",
-        "subject": "Congratulations! You won a new phone",
-        "message": "You were selected randomly. Pay a small delivery fee today and send your one-time code to claim the prize.",
-        "clues": [
-            "An unexpected prize is used as bait.",
-            "It asks for payment to claim the prize.",
-            "It asks for a one-time code, which must remain private.",
-        ],
+        "sender": "prize-team@claim-now.example",
+        "subject": "Congratulations! Claim your free phone",
+        "body": "You have won a new phone! Pay a small delivery fee today and enter your card details to receive your prize.",
         "answer": "Phishing",
-        "explanation": "Unexpected prizes, payment demands, and requests for one-time codes are strong warning signs. Never share an OTP. Verify promotions independently using the organisation's official website or app.",
+        "clues": [
+            "An unexpected prize is used to attract attention",
+            "It asks for card details and a fee",
+            "A deadline creates pressure to act quickly",
+        ],
     },
     {
-        "sender": "it-helpdesk@company.example",
-        "subject": "Action required: review your account",
-        "message": "Please review the account notice in the usual employee portal. If you are unsure, contact IT using the number in the company directory.",
+        "sender": "hr@company.example",
+        "subject": "Please review the updated staff policy",
+        "body": "Please review the policy during your next work session. If you are unsure whether this message is genuine, visit the company portal using your saved bookmark or contact HR through the usual channel.",
+        "answer": "Likely legitimate",
         "clues": [
-            "It points to a known portal instead of asking for a password by email.",
-            "It suggests verifying through a known contact method.",
-            "The text alone cannot prove who sent it.",
+            "It does not ask you to share a password or payment details",
+            "It recommends using a known company portal",
+            "Sender addresses can be spoofed, so verify unexpected attachments or links",
         ],
-        "answer": "Not enough information",
-        "explanation": "There isn't enough information to label this message safe. The safest choice is to open the portal using a saved bookmark or known address, and contact IT through the company directory.",
     },
     {
-        "sender": "delivery-update@parcel.example",
-        "subject": "Delivery problem — confirm details",
-        "message": "Your parcel is delayed. Open the attached file and enable macros to see the delivery address.",
-        "clues": [
-            "It asks you to open an unexpected attachment.",
-            "It asks you to enable macros, which can run risky code.",
-            "You can check delivery status through the courier's official app or website.",
-        ],
+        "sender": "support@micros0ft-account.example",
+        "subject": "Password expired — sign in now",
+        "body": "Your password expires in 10 minutes. Use the link below and enter your password and one-time code to prevent account deletion.",
         "answer": "Phishing",
-        "explanation": "Unexpected attachments and requests to enable macros are dangerous warning signs. Don't open the file. Check your delivery directly through the courier's official app or website.",
+        "clues": [
+            "It creates extreme urgency",
+            "The sender uses a look-alike brand spelling",
+            "It asks for a password and one-time code through a message link",
+        ],
     },
 ]
 
-QUIZ_QUESTIONS = [
+SCENARIOS = [
     {
-        "topic": "Phishing",
-        "question": "You receive an unexpected email asking for your account password. What is the safest response?",
+        "question": "A stranger messages you a link and says you must log in to see a surprise package. What should you do?",
         "options": [
-            "Reply with the password so support can help",
-            "Do not reply; verify through the official app or website",
-            "Forward it to all your friends",
-            "Click every link to see where it goes",
+            "Open the link and sign in quickly",
+            "Ignore the link and verify the claim through the official delivery service",
+            "Forward the link to friends to ask if it works",
         ],
-        "answer": "Do not reply; verify through the official app or website",
-        "explanation": "Never send passwords by email or message. Use a known official app, saved bookmark, or address you type yourself.",
+        "answer": "Ignore the link and verify the claim through the official delivery service",
+        "explanation": "Unexpected links can lead to fake sign-in pages. Use the official app or a website address you already trust.",
+        "points": 10,
     },
     {
-        "topic": "Account security",
+        "question": "You receive a login approval request that you did not initiate. What is the safest response?",
+        "options": [
+            "Approve it so the notifications stop",
+            "Deny it, change your password if needed, and review account security",
+            "Share the code with the person who says they are IT support",
+        ],
+        "answer": "Deny it, change your password if needed, and review account security",
+        "explanation": "An unexpected approval request may mean someone knows your password. Never share verification codes.",
+        "points": 10,
