@@ -1,114 +1,96 @@
-            st.session_state.quiz_answers.get(str(i)) == QUIZ_QUESTIONS[i]["answer"]
-            for i in order
-        )
-        st.metric("Your score", f"{correct} / {len(order)}", f"{round(correct / len(order) * 100)}%")
-        for position, i in enumerate(order, start=1):
-            q = QUIZ_QUESTIONS[i]
-            answer = st.session_state.quiz_answers.get(str(i), "No answer")
-            with st.expander(f"{'✅' if answer == q['answer'] else '❌'} Q{position}: {q['topic']}"):
-                st.write(q["question"])
-                st.write(f"**Your answer:** {answer}")
-                st.write(f"**Correct answer:** {q['answer']}")
-                st.write(q["explanation"])
-        if st.button("Try quiz again", type="primary"):
-            reset_quiz()
-            st.rerun()
-    else:
-        for position, i in enumerate(st.session_state.quiz_order, start=1):
-            q = QUIZ_QUESTIONS[i]
-            st.markdown(f"**Q{position}. {q['question']}**")
-            st.session_state.quiz_answers[str(i)] = st.radio(
-                "Choose one answer",
-                q["options"],
-                key=f"quiz_q_{i}",
-                index=None,
-                label_visibility="collapsed",
-            )
-            st.caption(f"Topic: {q['topic']}")
-            st.divider()
-        if st.button("Submit quiz", type="primary", use_container_width=True):
-            st.session_state.quiz_submitted = True
-            correct = sum(
-                st.session_state.quiz_answers.get(str(i)) == QUIZ_QUESTIONS[i]["answer"]
-                for i in st.session_state.quiz_order
-            )
-            if award_xp("quiz_completed", 30):
-                st.session_state.xp += max(0, correct * 2)
-            st.rerun()
+import os
+import random
+import re
+import streamlit as st
 
-# ----------------------------- Safety Scenarios ----------------------------
-elif page == "Safety Scenarios":
-    mark_module_visited(page)
-    st.subheader("🧭 What Would You Do?")
-    st.write("Practice choosing a safer response to everyday online situations.")
-    situations = [
-        {
-            "title": "A caller asks for your OTP",
-            "prompt": "Someone claiming to be from your bank says they need your one-time code to stop fraud.",
-            "options": [
-                "Give the code because they sound professional",
-                "Hang up and contact the bank using its official number or app",
-                "Send the code by text instead",
-            ],
-            "answer": "Hang up and contact the bank using its official number or app",
-            "explanation": "Never share one-time codes. Contact the bank through a trusted channel you find independently.",
-        },
-        {
-            "title": "A friend sends a strange link",
-            "prompt": "A friend's account sends an unexpected message asking you to sign in urgently.",
-            "options": [
-                "Sign in immediately",
-                "Ask the friend through another channel if they sent it",
-                "Forward the link to your group chat",
-            ],
-            "answer": "Ask the friend through another channel if they sent it",
-            "explanation": "Accounts can be compromised. Verify unexpected requests through a different trusted channel and avoid the link.",
-        },
-        {
-            "title": "A public computer remembers you",
-            "prompt": "You used a shared computer to check your email and notice your account is still signed in.",
-            "options": [
-                "Leave it for the next person",
-                "Sign out, close the session, and avoid saving credentials on shared devices",
-                "Save the password for convenience",
-            ],
-            "answer": "Sign out, close the session, and avoid saving credentials on shared devices",
-            "explanation": "Always sign out from shared devices. If you suspect someone accessed your account, secure it from your own device.",
-        },
-    ]
-    for i, situation in enumerate(situations):
-        with st.expander(situation["title"], expanded=(i == 0)):
-            st.write(situation["prompt"])
-            response = st.radio("Choose the safest action", situation["options"], key=f"situation_{i}")
-            if st.button("Check decision", key=f"situation_check_{i}"):
-                if response == situation["answer"]:
-                    st.success("Good choice!")
-                    if award_xp(f"situation_{i}", 10):
-                        st.toast("You earned 10 XP!")
-                else:
-                    st.warning("Try again. Think about how to verify the request independently.")
-                st.write(situation["explanation"])
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 
-# ----------------------------------- About ---------------------------------
-elif page == "About":
-    st.subheader("About CyberSmart Academy")
-    st.write(
-        "CyberSmart Academy is a beginner-friendly educational demo that teaches practical digital safety through simulated messages, quizzes, and decision-making scenarios."
-    )
-    st.markdown("#### Learning topics")
-    st.markdown(
-        "- Recognising phishing and social engineering\n"
-        "- Creating and protecting strong, unique passwords\n"
-        "- Keeping one-time codes private\n"
-        "- Safer browsing, updates, backups, and privacy\n"
-        "- Responding when an account may be compromised"
-    )
-    st.warning(
-        "Educational disclaimer: This app provides general awareness training. Its password score is a simplified estimate, not a security audit. Training messages are fictional and must not be treated as evidence about a real sender."
-    )
-    st.markdown("#### Built with")
-    st.write("Python · Streamlit · Session State")
-    st.markdown("[Streamlit Community Cloud](https://share.streamlit.io/)")
+st.set_page_config(
+    page_title="CyberSmart Academy",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-st.divider()
-st.caption("CyberSmart Academy • Learn responsibly. Stay curious. Stay safe.")
+# ----------------------------- Sample content -----------------------------
+PHISHING_SCENARIOS = [
+    {
+        "sender": "security-alerts@paypaI.example",
+        "subject": "URGENT: Your account will be closed in 10 minutes",
+        "message": "We noticed unusual activity. Confirm your password immediately to avoid losing access.",
+        "clues": [
+            "The message uses pressure and urgency.",
+            "The sender address uses a suspicious look-alike spelling.",
+            "A legitimate service should not ask you to send your password in a message.",
+        ],
+        "answer": "Phishing",
+        "explanation": "This message uses urgency, a look-alike sender address, and a request for a password. Don't click links or share credentials. Visit the service using its official app or a web address you type yourself.",
+    },
+    {
+        "sender": "library@university.example",
+        "subject": "Library opening hours this week",
+        "message": "The library will close at 5 PM on Friday. You can check the notice board in the student portal.",
+        "clues": [
+            "The message gives routine information.",
+            "It does not request a password, payment, or urgent action.",
+            "You can verify the notice through a known university channel.",
+        ],
+        "answer": "Likely legitimate",
+        "explanation": "This message has no obvious phishing indicators in the text shown. Still, verify unexpected messages through a known official channel; a message can look ordinary and still be fraudulent.",
+    },
+    {
+        "sender": "prize-team@free-gift.example",
+        "subject": "Congratulations! You won a new phone",
+        "message": "You were selected randomly. Pay a small delivery fee today and send your one-time code to claim the prize.",
+        "clues": [
+            "An unexpected prize is used as bait.",
+            "It asks for payment to claim the prize.",
+            "It asks for a one-time code, which must remain private.",
+        ],
+        "answer": "Phishing",
+        "explanation": "Unexpected prizes, payment demands, and requests for one-time codes are strong warning signs. Never share an OTP. Verify promotions independently using the organisation's official website or app.",
+    },
+    {
+        "sender": "it-helpdesk@company.example",
+        "subject": "Action required: review your account",
+        "message": "Please review the account notice in the usual employee portal. If you are unsure, contact IT using the number in the company directory.",
+        "clues": [
+            "It points to a known portal instead of asking for a password by email.",
+            "It suggests verifying through a known contact method.",
+            "The text alone cannot prove who sent it.",
+        ],
+        "answer": "Not enough information",
+        "explanation": "There isn't enough information to label this message safe. The safest choice is to open the portal using a saved bookmark or known address, and contact IT through the company directory.",
+    },
+    {
+        "sender": "delivery-update@parcel.example",
+        "subject": "Delivery problem — confirm details",
+        "message": "Your parcel is delayed. Open the attached file and enable macros to see the delivery address.",
+        "clues": [
+            "It asks you to open an unexpected attachment.",
+            "It asks you to enable macros, which can run risky code.",
+            "You can check delivery status through the courier's official app or website.",
+        ],
+        "answer": "Phishing",
+        "explanation": "Unexpected attachments and requests to enable macros are dangerous warning signs. Don't open the file. Check your delivery directly through the courier's official app or website.",
+    },
+]
+
+QUIZ_QUESTIONS = [
+    {
+        "topic": "Phishing",
+        "question": "You receive an unexpected email asking for your account password. What is the safest response?",
+        "options": [
+            "Reply with the password so support can help",
+            "Do not reply; verify through the official app or website",
+            "Forward it to all your friends",
+            "Click every link to see where it goes",
+        ],
+        "answer": "Do not reply; verify through the official app or website",
+        "explanation": "Never send passwords by email or message. Use a known official app, saved bookmark, or address you type yourself.",
+    },
+    {
+        "topic": "Account security",
